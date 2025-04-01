@@ -36,85 +36,97 @@ function App() {
       setLoadingJsonFiles(true);
       
       try {
-        // Try to fetch from the API endpoint
-        const response = await fetch('/api/json-files');
-        if (!response.ok) {
-          throw new Error(`Error fetching JSON files: ${response.status} ${response.statusText}`);
-        }
+        console.log("Starting direct file scan for JSON files");
         
-        const data = await response.json();
-        if (data.files && Array.isArray(data.files)) {
-          // Remove duplicates
-          const uniqueFiles = [...new Set(data.files)];
-          console.log('Found JSON files:', uniqueFiles);
-          setJsonFiles(uniqueFiles);
-          
-          // If there are files, load the first one by default
-          if (uniqueFiles.length > 0) {
-            setSelectedFile(uniqueFiles[0]);
-            loadJsonFile(uniqueFiles[0]);
-          } else {
-            setLoadingError("Keine Lehrplan-JSON-Dateien im json-Ordner gefunden.");
-          }
-        } else {
-          throw new Error('Invalid response format from server');
-        }
-      } catch (error) {
-        console.error('Error fetching JSON files list:', error);
+        // First try direct file access method
+        const knownFiles = [
+          'Anlagenmechaniker-IH04-03-25-idF-18-02-23_Anlagenmechaniker_Anlagenmechanikerin.json',
+          'Aenderungsschneider.pdf_converted_Änderungsschneider_Änderungsschneiderin.json',
+          'Anlagenmechaniker_SHK_16-01-29-E.pdf_converted_Anlagenmechaniker_für_Sanitär-__Heizungs-_und_Klimatechnik_Anlagenmechanikerin_für_Sanitär-__Heizungs-_und_Klimatechnik.json',
+          'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json',
+          'Aufbereitungsmechaniker92-04-29.pdf_converted_Aufbereitungsmechaniker_Aufbereitungsmechanikerin.json',
+          'Augenoptiker11-03-25-E_01.pdf_converted_Augenoptiker_Augenoptikerin.json',
+          'Ausbaufacharbeiter.pdf_converted_Ausbaufacharbeiter_-in.json'
+        ];
         
-        // Fallback to checking for files directly in the json folder
-        try {
-          console.log('Attempting direct file access...');
-          
-          // List of known JSON files to check for
-          const knownFiles = [
-            'Anlagenmechaniker-IH04-03-25-idF-18-02-23_Anlagenmechaniker_Anlagenmechanikerin.json',
-            'Aenderungsschneider.pdf_converted_Änderungsschneider_Änderungsschneiderin.json',
-            'Anlagenmechaniker_SHK_16-01-29-E.pdf_converted_Anlagenmechaniker_für_Sanitär-__Heizungs-_und_Klimatechnik_Anlagenmechanikerin_für_Sanitär-__Heizungs-_und_Klimatechnik.json',
-            'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json',
-            'Aufbereitungsmechaniker92-04-29.pdf_converted_Aufbereitungsmechaniker_Aufbereitungsmechanikerin.json',
-            'Augenoptiker11-03-25-E_01.pdf_converted_Augenoptiker_Augenoptikerin.json',
-            'Ausbaufacharbeiter.pdf_converted_Ausbaufacharbeiter_-in.json'
-          ];
-          
-          // The paths to check
-          const paths = ['/json/', '/public/json/'];
-          const foundFiles = [];
-          
-          for (const path of paths) {
-            for (const file of knownFiles) {
-              try {
-                const fileUrl = `${path}${file}`;
-                console.log(`Checking if file exists at: ${fileUrl}`);
-                
-                const response = await fetch(fileUrl, { method: 'HEAD' });
-                if (response.ok) {
-                  if (!foundFiles.includes(file)) { // Only add if not already in the list
-                    foundFiles.push(file);
-                    console.log(`Found file: ${fileUrl}`);
-                  }
+        // The paths to check
+        const paths = ['/json/', '/public/json/'];
+        const foundFiles: string[] = [];
+        
+        for (const path of paths) {
+          for (const file of knownFiles) {
+            try {
+              const fileUrl = `${path}${file}`;
+              console.log(`Checking if file exists at: ${fileUrl}`);
+              
+              const response = await fetch(fileUrl, { 
+                method: 'HEAD',
+                headers: {
+                  'Accept': 'application/json',
+                  'Cache-Control': 'no-cache'
                 }
-              } catch (fileError) {
-                // Ignore - file likely doesn't exist
+              });
+              
+              if (response.ok) {
+                if (!foundFiles.includes(file)) {
+                  foundFiles.push(file);
+                  console.log(`Found file: ${fileUrl}`);
+                }
               }
+            } catch (fileError) {
+              // Ignore - file likely doesn't exist
             }
           }
+        }
+        
+        // Now try the API endpoint
+        try {
+          // Try to fetch from the API endpoint
+          console.log("Now trying the API endpoint");
+          const response = await fetch('/api/json-files', {
+            headers: {
+              'Accept': 'application/json',
+              'Cache-Control': 'no-cache, no-store, must-revalidate'
+            }
+          });
           
-          if (foundFiles.length > 0) {
-            console.log('Found files through direct access:', foundFiles);
-            setJsonFiles(foundFiles);
+          if (!response.ok) {
+            throw new Error(`Error fetching JSON files: ${response.status} ${response.statusText}`);
+          }
+          
+          const data = await response.json();
+          if (data.files && Array.isArray(data.files)) {
+            // Remove duplicates
+            const apiFiles = data.files.filter(file => !foundFiles.includes(file));
+            foundFiles.push(...apiFiles);
+            console.log('Found JSON files from API:', apiFiles);
+          }
+        } catch (apiError) {
+          console.log("API endpoint failed:", apiError);
+        }
+        
+        // If we found any files, use them
+        if (foundFiles.length > 0) {
+          console.log('Final list of JSON files:', foundFiles);
+          setJsonFiles(foundFiles);
+          
+          // If there's no selected file yet, select the first one
+          if (!selectedFile && foundFiles.length > 0) {
             setSelectedFile(foundFiles[0]);
             loadJsonFile(foundFiles[0]);
-          } else {
-            // Last resort - just use the hardcoded list
-            setJsonFiles(knownFiles);
+          }
+        } else {
+          // Last resort - just use the hardcoded list
+          console.log('No files found, using hardcoded list');
+          setJsonFiles(knownFiles);
+          if (!selectedFile) {
             setSelectedFile(knownFiles[0]);
             loadJsonFile(knownFiles[0]);
           }
-        } catch (fallbackError) {
-          console.error('All file detection methods failed:', fallbackError);
-          setLoadingError("Konnte keine JSON-Dateien finden. Bitte lade eine Datei hoch oder aktualisiere die Seite.");
         }
+      } catch (error) {
+        console.error('Error fetching JSON files list:', error);
+        setLoadingError("Es ist ein Fehler beim Laden der Dateien aufgetreten. Bitte versuche es später noch einmal.");
       } finally {
         setLoadingJsonFiles(false);
       }
@@ -135,58 +147,53 @@ function App() {
       setLoading(true);
       setLoadingError(null);
       
-      // First try the dedicated API endpoint
-      try {
-        console.log(`Trying API endpoint for JSON file: ${filename}`);
-        const apiResponse = await fetch(`/api/json/${filename}`);
-        
-        if (apiResponse.ok) {
-          const jsonData = await apiResponse.json();
-          console.log("Successfully loaded JSON data from API endpoint");
-          processJsonData(jsonData);
-          return;
-        } else {
-          console.log(`API endpoint failed with status: ${apiResponse.status}`);
-        }
-      } catch (apiError) {
-        console.log("API endpoint failed:", apiError);
-      }
+      console.log(`Trying to load JSON file: ${filename}`);
       
-      // If API endpoint failed, try multiple potential paths directly
-      const potentialPaths = [
+      // Try multiple potential paths
+      const paths = [
         `/json/${filename}`,
-        `/public/json/${filename}`
+        `/public/json/${filename}`,
+        `/api/json/${filename}`
       ];
       
-      let jsonResponse = null;
-      let successPath = '';
+      let jsonData = null;
       
-      for (const path of potentialPaths) {
+      for (const path of paths) {
         try {
-          console.log(`Trying to load JSON from: ${path}`);
-          const response = await fetch(path);
+          console.log(`Attempting to load from: ${path}`);
+          const response = await fetch(path, {
+            headers: {
+              'Accept': 'application/json',
+              'Cache-Control': 'no-cache'
+            }
+          });
+          
           if (response.ok) {
-            jsonResponse = response;
-            successPath = path;
-            break;
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              const text = await response.text();
+              try {
+                jsonData = JSON.parse(text);
+                console.log(`Successfully loaded JSON from ${path}`);
+                break; // Exit the loop if successful
+              } catch (parseError) {
+                console.error(`Error parsing JSON from ${path}:`, parseError);
+              }
+            } else {
+              console.warn(`Unexpected content type from ${path}: ${contentType}`);
+            }
+          } else {
+            console.log(`Failed to load from ${path}: ${response.status} ${response.statusText}`);
           }
         } catch (pathError) {
-          console.log(`Failed to load from ${path}:`, pathError);
+          console.log(`Error trying path ${path}:`, pathError);
         }
       }
       
-      if (!jsonResponse) {
-        throw new Error(`Konnte die Datei ${filename} unter keinem der Pfade finden.`);
-      }
-      
-      console.log(`Successfully loaded JSON from: ${successPath}`);
-      
-      try {
-        const jsonData = await jsonResponse.json();
+      if (jsonData) {
         processJsonData(jsonData);
-      } catch (parseError) {
-        console.error("JSON parse error:", parseError);
-        throw new Error(`Fehler beim Parsen der JSON-Datei. Ungültiges JSON-Format: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+      } else {
+        throw new Error(`Konnte die Datei ${filename} nicht laden. Bitte versuche es mit einer anderen Datei.`);
       }
     } catch (error) {
       console.error('Error loading JSON file:', error);
@@ -519,7 +526,7 @@ function App() {
             <div className="grid grid-cols-12 gap-6">
               {/* Column 1: Lehrplan Struktur */}
               <div className="col-span-12 md:col-span-4 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
-                <h2 className="text-xl font-semibold mb-4 text-green-700">Lehrplan Struktur</h2>
+                <h2 className="text-xl font-semibold mb-4 text-green-700">Curriculum Struktur</h2>
                 <CurriculumTree 
                   curriculum={curriculumData}
                   selectedCompetency={selectedCompetency}

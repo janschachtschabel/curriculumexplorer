@@ -29,9 +29,18 @@ const serveJsonFiles = () => {
             if (filePath && filePath.endsWith('.json')) {
               console.log(`Serving JSON file: ${filePath}`);
               const content = fs.readFileSync(filePath, 'utf-8');
-              res.setHeader('Content-Type', 'application/json');
-              res.end(content);
-              return;
+              
+              // Verify it's valid JSON
+              try {
+                JSON.parse(content);
+                res.setHeader('Content-Type', 'application/json');
+                res.end(content);
+                return;
+              } catch (parseError) {
+                console.error(`Invalid JSON in ${filePath}:`, parseError);
+                next();
+                return;
+              }
             }
           } catch (error) {
             console.error('Error serving JSON file:', error);
@@ -59,6 +68,8 @@ export default defineConfig({
           // Add CORS headers in development
           proxy.on('proxyRes', (proxyRes, req, res) => {
             proxyRes.headers['Access-Control-Allow-Origin'] = '*';
+            proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
+            proxyRes.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept';
           });
           
           // Add error handling

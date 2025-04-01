@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { FileJson, RefreshCw } from 'lucide-react';
-import axios from 'axios';
 
 interface JsonOption {
   value: string;
@@ -47,47 +46,120 @@ export function JsonSelector({ jsonFiles, selectedFile, onSelect, loading = fals
     console.log("Starting JSON file detection...");
     
     try {
-      // First try the server API
-      const response = await axios.get('/api/json-files');
-      if (response.status === 200 && response.data.files && Array.isArray(response.data.files)) {
-        const formattedFiles = response.data.files.map((file: string) => ({
+      // First try direct file scanning
+      const knownDirectories = [
+        '/json/',
+        '/public/json/',
+      ];
+      
+      console.log("Trying direct file access approach first");
+      
+      let foundFiles: JsonOption[] = [];
+      const knownFiles = [
+        'Anlagenmechaniker-IH04-03-25-idF-18-02-23_Anlagenmechaniker_Anlagenmechanikerin.json',
+        'Aenderungsschneider.pdf_converted_Änderungsschneider_Änderungsschneiderin.json',
+        'Anlagenmechaniker_SHK_16-01-29-E.pdf_converted_Anlagenmechaniker_für_Sanitär-__Heizungs-_und_Klimatechnik_Anlagenmechanikerin_für_Sanitär-__Heizungs-_und_Klimatechnik.json',
+        'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json',
+        'Aufbereitungsmechaniker92-04-29.pdf_converted_Aufbereitungsmechaniker_Aufbereitungsmechanikerin.json',
+        'Augenoptiker11-03-25-E_01.pdf_converted_Augenoptiker_Augenoptikerin.json',
+        'Ausbaufacharbeiter.pdf_converted_Ausbaufacharbeiter_-in.json'
+      ];
+      
+      // Try to access each file in each directory
+      for (const dir of knownDirectories) {
+        for (const file of knownFiles) {
+          try {
+            // Check if file exists with a HEAD request (more efficient than GET)
+            const response = await fetch(`${dir}${file}`, { 
+              method: 'HEAD',
+              headers: {
+                'Cache-Control': 'no-cache'
+              }
+            });
+            
+            if (response.ok) {
+              console.log(`Found file at ${dir}${file}`);
+              foundFiles.push({
+                value: file,
+                label: formatFileName(file)
+              });
+            }
+          } catch (e) {
+            // Ignore errors, just continue trying other files
+          }
+        }
+      }
+      
+      // Now try the API endpoint
+      try {
+        console.log("Now trying API endpoint");
+        const response = await fetch('/api/json-files', {
+          headers: {
+            'Accept': 'application/json',
+            'Cache-Control': 'no-cache'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.files && Array.isArray(data.files)) {
+            console.log(`API returned ${data.files.length} files`);
+            
+            const apiFiles = data.files.map((file: string) => ({
+              value: file,
+              label: formatFileName(file)
+            }));
+            
+            // Combine API results with directly found files
+            foundFiles = [...foundFiles, ...apiFiles];
+          } else {
+            console.warn("API response didn't contain expected files array");
+          }
+        } else {
+          console.warn(`API returned status ${response.status}`);
+        }
+      } catch (apiError) {
+        console.warn("API request failed, continuing with direct file detection", apiError);
+      }
+      
+      // As a final fallback, just use the hardcoded list
+      if (foundFiles.length === 0) {
+        console.log("No files found, using hardcoded list");
+        foundFiles = knownFiles.map(file => ({
           value: file,
           label: formatFileName(file)
         }));
-        
-        // Remove duplicates
-        const uniqueFiles = removeDuplicates(formattedFiles);
-        setLocalJsonFiles(uniqueFiles);
-        
-        // If no file is selected and we have files, select the first one
-        if (!selectedFile && uniqueFiles.length > 0) {
-          onSelect(uniqueFiles[0].value);
-        }
+      }
+      
+      // Remove duplicates and update state
+      const uniqueFiles = removeDuplicates(foundFiles);
+      console.log(`Final list contains ${uniqueFiles.length} unique files`);
+      setLocalJsonFiles(uniqueFiles);
+      
+      // If no file is selected and we have files, select the first one
+      if (!selectedFile && uniqueFiles.length > 0) {
+        onSelect(uniqueFiles[0].value);
       }
     } catch (error) {
-      console.error("Failed to load JSON files", error);
+      console.error('Error refreshing JSON files:', error);
       
-      // Fallback to hardcoded list as last resort
-      const hardcodedFiles = getHardcodedFileList();
-      setLocalJsonFiles(hardcodedFiles);
+      // Fallback to hardcoded list
+      const fallbackFiles = [
+        'Anlagenmechaniker-IH04-03-25-idF-18-02-23_Anlagenmechaniker_Anlagenmechanikerin.json',
+        'Aenderungsschneider.pdf_converted_Änderungsschneider_Änderungsschneiderin.json',
+        'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json'
+      ].map(file => ({
+        value: file,
+        label: formatFileName(file)
+      }));
+      
+      setLocalJsonFiles(fallbackFiles);
+      if (!selectedFile && fallbackFiles.length > 0) {
+        onSelect(fallbackFiles[0].value);
+      }
     } finally {
       setRefreshing(false);
     }
-  };
-
-  // Get hardcoded file list as absolute last resort
-  const getHardcodedFileList = (): JsonOption[] => {
-    const knownFiles = [
-      'Anlagenmechaniker-IH04-03-25-idF-18-02-23_Anlagenmechaniker_Anlagenmechanikerin.json',
-      'Aenderungsschneider.pdf_converted_Änderungsschneider_Änderungsschneiderin.json',
-      'Anlagenmechaniker_SHK_16-01-29-E.pdf_converted_Anlagenmechaniker_für_Sanitär-__Heizungs-_und_Klimatechnik_Anlagenmechanikerin_für_Sanitär-__Heizungs-_und_Klimatechnik.json',
-      'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json'
-    ];
-    
-    return knownFiles.map(file => ({
-      value: file,
-      label: formatFileName(file)
-    }));
   };
 
   // Format filename for display

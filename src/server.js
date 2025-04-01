@@ -137,6 +137,7 @@ async function createServer() {
         }
       }
       
+      res.setHeader('Content-Type', 'application/json');
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -152,9 +153,9 @@ async function createServer() {
       const potentialPaths = [
         path.join(__dirname, '..', 'json'),
         path.join(__dirname, '..', 'public', 'json'),
-        path.join(__dirname, '..', 'dist', 'json'),
         path.join(__dirname, 'json'),
-        path.join(__dirname, 'public', 'json')
+        path.join(__dirname, 'public', 'json'),
+        path.join(__dirname, '..', 'dist', 'json')
       ];
       
       console.log('Checking these paths for JSON files:', potentialPaths);
@@ -162,21 +163,65 @@ async function createServer() {
       const allFiles = [];
       const pathResults = {};
       
+      // Check each potential path
       for (const jsonPath of potentialPaths) {
         try {
           console.log(`Checking directory: ${jsonPath}`);
-          const dirExists = await fs.access(jsonPath).then(() => true).catch(() => false);
+          // Use fs.access to check if the directory exists
+          let dirExists = false;
+          try {
+            await fs.access(jsonPath);
+            dirExists = true;
+          } catch {
+            dirExists = false;
+          }
           
           if (dirExists) {
             try {
               const files = await fs.readdir(jsonPath);
+              // Filter only .json files
               const jsonFiles = files.filter(file => file.endsWith('.json'));
               console.log(`Found ${jsonFiles.length} JSON files in ${jsonPath}:`, jsonFiles);
+              
+              // Add detailed information about each file
+              const fileDetails = [];
+              for (const file of jsonFiles) {
+                try {
+                  const filePath = path.join(jsonPath, file);
+                  const fileStats = await fs.stat(filePath);
+                  
+                  // Check if the file is readable
+                  try {
+                    await fs.access(filePath, fs.constants.R_OK);
+                    fileDetails.push({
+                      name: file,
+                      path: filePath,
+                      size: fileStats.size,
+                      lastModified: fileStats.mtime,
+                      readable: true
+                    });
+                  } catch {
+                    fileDetails.push({
+                      name: file,
+                      path: filePath,
+                      size: fileStats.size,
+                      lastModified: fileStats.mtime,
+                      readable: false
+                    });
+                  }
+                } catch (fileError) {
+                  fileDetails.push({ 
+                    name: file, 
+                    error: fileError.message 
+                  });
+                }
+              }
               
               // Store results for this path
               pathResults[jsonPath] = {
                 exists: true,
-                files: jsonFiles
+                files: jsonFiles,
+                fileDetails: fileDetails
               };
               
               allFiles.push(...jsonFiles);
@@ -220,6 +265,7 @@ async function createServer() {
         uniqueFiles.push(...knownFiles);
       }
       
+      res.setHeader('Content-Type', 'application/json');
       res.json({ 
         files: uniqueFiles,
         searchResults: pathResults
@@ -242,32 +288,47 @@ async function createServer() {
     const potentialPaths = [
       path.join(__dirname, '..', 'json', filename),
       path.join(__dirname, '..', 'public', 'json', filename),
-      path.join(__dirname, '..', 'dist', 'json', filename),
       path.join(__dirname, 'json', filename),
-      path.join(__dirname, 'public', 'json', filename)
+      path.join(__dirname, 'public', 'json', filename),
+      path.join(__dirname, '..', 'dist', 'json', filename)
     ];
     
     for (const filePath of potentialPaths) {
       try {
         console.log(`Trying to read: ${filePath}`);
+        
+        // Check if the file exists
+        try {
+          await fs.access(filePath);
+        } catch {
+          console.log(`File does not exist: ${filePath}`);
+          continue;
+        }
+        
         const stats = await fs.stat(filePath);
         
         if (stats.isFile()) {
           console.log(`File found at: ${filePath}`);
-          const fileContent = await fs.readFile(filePath, 'utf8');
           
-          // Try parsing the JSON to verify it's valid
           try {
-            JSON.parse(fileContent);
-            res.setHeader('Content-Type', 'application/json');
-            return res.send(fileContent);
-          } catch (parseError) {
-            console.error(`Invalid JSON in ${filePath}:`, parseError);
-            continue; // Try next path if this file isn't valid JSON
+            const fileContent = await fs.readFile(filePath, 'utf8');
+            
+            // Verify this is actually JSON before sending
+            try {
+              JSON.parse(fileContent);
+              res.setHeader('Content-Type', 'application/json');
+              return res.send(fileContent);
+            } catch (parseError) {
+              console.error(`Invalid JSON in ${filePath}:`, parseError);
+              continue; // Try next path
+            }
+          } catch (readError) {
+            console.error(`Error reading file ${filePath}:`, readError);
+            continue; // Try next path
           }
         }
       } catch (error) {
-        console.log(`File not found at: ${filePath}`);
+        console.log(`Error checking file ${filePath}:`, error);
         // Continue to next path
       }
     }
@@ -280,15 +341,76 @@ async function createServer() {
     });
   });
 
-  // Serve the json directory from multiple potential locations
-  app.use('/json', express.static(path.join(__dirname, '..', 'json')));
-  app.use('/json', express.static(path.join(__dirname, '..', 'public', 'json')));
-  app.use('/json', express.static(path.join(__dirname, '..', 'dist', 'json')));
-  app.use('/json', express.static(path.join(__dirname, 'json')));
-  app.use('/json', express.static(path.join(__dirname, 'public', 'json')));
+  // Set up static json file serving
+  const jsonPaths = [
+    path.join(__dirname, '..', 'json'),
+    path.join(__dirname, '..', 'public', 'json'),
+    path.join(__dirname, 'json'),
+    path.join(__dirname, 'public', 'json'),
+    path.join(__dirname, '..', 'dist', 'json')
+  ];
+
+  // Custom middleware to serve JSON files with proper content type
+  app.use('/json', (req, res, next) => {
+    const filename = req.path.substring(1); // Remove leading slash
+    if (!filename || !filename.endsWith('.json')) {
+      return next();
+    }
+
+    // Try each potential path
+    (async () => {
+      for (const basePath of jsonPaths) {
+        const filePath = path.join(basePath, filename);
+        try {
+          // Check if the file exists and is readable
+          try {
+            await fs.access(filePath, fs.constants.R_OK);
+          } catch {
+            continue; // Skip to next path if file doesn't exist or isn't readable
+          }
+          
+          const stats = await fs.stat(filePath);
+          if (stats.isFile()) {
+            try {
+              const content = await fs.readFile(filePath, 'utf8');
+              
+              // Verify it's valid JSON before sending
+              try {
+                JSON.parse(content);
+                res.setHeader('Content-Type', 'application/json');
+                res.send(content);
+                return; // Successfully served
+              } catch (parseError) {
+                console.error(`File ${filename} contains invalid JSON:`, parseError);
+              }
+            } catch (readError) {
+              console.error(`Error reading file ${filePath}:`, readError);
+            }
+          }
+        } catch (error) {
+          // Continue to next path
+          console.error(`Error with path ${filePath}:`, error);
+        }
+      }
+      // If we get here, we couldn't serve the file
+      next();
+    })().catch(next);
+  });
+
+  // Fallback static file serving for JSON directories
+  jsonPaths.forEach(dirPath => {
+    app.use('/json', express.static(dirPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.json')) {
+          res.setHeader('Content-Type', 'application/json');
+        }
+      }
+    }));
+  });
 
   // Serve static files from the 'dist' directory after build
   app.use(express.static(path.join(__dirname, '..', 'dist')));
+  app.use(express.static(path.join(__dirname, 'dist')));
 
   // For all routes not handled by the static middleware, send the index.html file
   // Only enable this for production mode
@@ -308,4 +430,7 @@ async function createServer() {
   });
 }
 
-createServer();
+createServer().catch(err => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
