@@ -516,8 +516,9 @@ function App() {
           </div>
         ) : curriculumData ? (
           activeTab === 'tree' ? (
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-              <div className="md:col-span-4 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+            <div className="grid grid-cols-12 gap-6">
+              {/* Column 1: Lehrplan Struktur */}
+              <div className="col-span-12 md:col-span-4 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
                 <h2 className="text-xl font-semibold mb-4 text-green-700">Lehrplan Struktur</h2>
                 <CurriculumTree 
                   curriculum={curriculumData}
@@ -527,7 +528,8 @@ function App() {
                 />
               </div>
               
-              <div className="md:col-span-3 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+              {/* Column 2: ESCO Mappings */}
+              <div className="col-span-12 md:col-span-4 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)', width: '100%' }}>
                 <h2 className="text-xl font-semibold mb-4 text-blue-700">
                   {showProfessionInfo ? 'Berufsinformationen' : 'ESCO Mappings'}
                 </h2>
@@ -547,7 +549,8 @@ function App() {
                 )}
               </div>
               
-              <div className="md:col-span-5 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
+              {/* Column 3: WLO Inhalte */}
+              <div className="col-span-12 md:col-span-4 bg-white rounded-lg shadow-md p-4 overflow-auto" style={{ maxHeight: 'calc(100vh - 240px)' }}>
                 <h2 className="text-xl font-semibold mb-4">WLO Inhalte</h2>
                 {selectedCompetency || searchTerm ? (
                   <>
