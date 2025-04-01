@@ -1,20 +1,5 @@
 import axios from 'axios';
-import axiosRetry from 'axios-retry';
 import { WLOSearchParams, CollectionParams } from './types';
-
-// Configure axios-retry
-axiosRetry(axios, {
-  retries: 3, // Number of retries
-  retryDelay: (retryCount) => {
-    console.log(`Retry attempt: ${retryCount}`);
-    return retryCount * 1000; // Time between retries (1s, 2s, 3s)
-  },
-  retryCondition: (error) => {
-    // Only retry on network errors and 5xx status codes
-    return axiosRetry.isNetworkOrIdempotentRequestError(error) || 
-           (error.response?.status >= 500 && error.response?.status < 600);
-  },
-});
 
 // Create a simple event emitter for debug info
 type DebugListener = (info: string) => void;
@@ -33,51 +18,6 @@ export function onDebugInfo(listener: DebugListener) {
 function emitDebugInfo(info: string) {
   debugListeners.forEach(listener => listener(info));
 }
-
-// Mock response data for when the API is unavailable
-const mockSearchResults = {
-  "nodes": [
-    {
-      "properties": {
-        "cclom:title": ["Anlagenmechaniker - Technische Unterlagen"],
-        "cclom:general_description": ["Übungen zum Umgang mit technischen Unterlagen und Zeichnungen für Anlagenmechaniker"],
-        "ccm:taxonid_DISPLAYNAME": ["Technik"],
-        "ccm:educationalcontext_DISPLAYNAME": ["Berufliche Bildung"],
-        "cclom:general_keyword": ["Technische Zeichnung", "Anlagentechnik", "Berufliche Bildung"],
-        "ccm:oeh_lrt_aggregated_DISPLAYNAME": ["Arbeitsblatt"]
-      },
-      "ref": {
-        "id": "mock-id-1"
-      }
-    },
-    {
-      "properties": {
-        "cclom:title": ["Grundlagen der Metallbearbeitung"],
-        "cclom:general_description": ["Lerninhalte zu grundlegenden Techniken der Metallbearbeitung für die Ausbildung"],
-        "ccm:taxonid_DISPLAYNAME": ["Metallbau"],
-        "ccm:educationalcontext_DISPLAYNAME": ["Berufliche Bildung"],
-        "cclom:general_keyword": ["Metallbearbeitung", "Werkstoffe", "Handwerkliche Grundlagen"],
-        "ccm:oeh_lrt_aggregated_DISPLAYNAME": ["Lernmodul"]
-      },
-      "ref": {
-        "id": "mock-id-2"
-      }
-    },
-    {
-      "properties": {
-        "cclom:title": ["Wartungsarbeiten an Rohrleitungssystemen"],
-        "cclom:general_description": ["Anleitung zur fachgerechten Wartung und Instandhaltung von Rohrleitungssystemen"],
-        "ccm:taxonid_DISPLAYNAME": ["Anlagentechnik"],
-        "ccm:educationalcontext_DISPLAYNAME": ["Berufliche Bildung"],
-        "cclom:general_keyword": ["Wartung", "Rohrleitungen", "Instandhaltung"],
-        "ccm:oeh_lrt_aggregated_DISPLAYNAME": ["Handreichung"]
-      },
-      "ref": {
-        "id": "mock-id-3"
-      }
-    }
-  ]
-};
 
 export async function searchWLO({
   properties,
@@ -125,7 +65,12 @@ export async function searchWLO({
     });
 
     const url = `/api/edu-sharing/rest/search/v1/queries/-home-/mds_oeh/ngsearch?${searchParams}`;
-    emitDebugInfo(`POST ${url}\nBody: ${JSON.stringify({ criteria }, null, 2)}`);
+    
+    console.log('WLO SEARCH REQUEST:');
+    console.log('- URL:', url);
+    console.log('- Criteria:', JSON.stringify(criteria, null, 2));
+    
+    emitDebugInfo(`REQUEST: POST ${url}\nBody: ${JSON.stringify({ criteria }, null, 2)}`);
 
     try {
       const response = await axios.post(
@@ -135,44 +80,41 @@ export async function searchWLO({
           headers: {
             'Accept': 'application/json',
             'Content-Type': 'application/json'
-          }
+          },
+          signal
         }
       );
 
+      console.log(`WLO SEARCH RESPONSE: Status ${response.status}, Found ${response.data?.nodes?.length || 0} results`);
+      emitDebugInfo(`RESPONSE: Status ${response.status}, Found ${response.data?.nodes?.length || 0} results`);
+      
       return response.data;
     } catch (error) {
       console.error('Search failed with axios:', error);
       
       // Fall back to fetch API
       console.log('Trying with fetch API as fallback');
-      try {
-        const fetchResponse = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ criteria }),
-          signal
-        });
-        
-        if (!fetchResponse.ok) {
-          throw new Error(`HTTP error! Status: ${fetchResponse.status}`);
-        }
-        
-        const data = await fetchResponse.json();
-        console.log('Successfully fetched with fetch API');
-        return data;
-      } catch (fetchError) {
-        console.error('Both request methods failed:', fetchError);
-        // Return mock data after all attempts failed
-        console.log('Using mock data as last resort');
-        return mockSearchResults;
+      const fetchResponse = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ criteria }),
+        signal
+      });
+      
+      if (!fetchResponse.ok) {
+        throw new Error(`HTTP error! Status: ${fetchResponse.status}`);
       }
+      
+      const data = await fetchResponse.json();
+      console.log('Successfully fetched with fetch API');
+      return data;
     }
   } catch (error) {
     console.error('Error in searchWLO function:', error);
-    return mockSearchResults;
+    throw error;
   }
 }
 
@@ -183,6 +125,7 @@ export async function getCollectionContents({
 }: CollectionParams) {
   try {
     const url = `/api/edu-sharing/rest/node/v1/nodes/-home-/${collectionId}/children`;
+    
     emitDebugInfo(`GET ${url}\nParams: ${JSON.stringify({ maxItems, skipCount, filter: 'files', propertyFilter: '-all-' }, null, 2)}`);
 
     const response = await axios.get(
@@ -203,11 +146,8 @@ export async function getCollectionContents({
 
     return response.data;
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      console.error('Collection request failed:', error.message);
-    }
     console.error('Error in getCollectionContents function:', error);
-    return { nodes: [] };
+    throw error;
   }
 }
 
@@ -225,6 +165,7 @@ async function fetchCollectionHierarchy(
   try {
     // Get subcollections
     const childrenUrl = `/api/edu-sharing/rest/node/v1/nodes/-home-/${collectionId}/children`;
+    
     emitDebugInfo(`GET ${childrenUrl}?maxItems=100&skipCount=0&filter=folders&propertyFilter=-all-`);
 
     const response = await axios.get(childrenUrl, {
@@ -300,6 +241,7 @@ async function fetchCollectionHierarchy(
     }
   } catch (error) {
     console.error(`Failed to fetch collection hierarchy for ${collectionId}:`, error);
+    throw error;
   }
 }
 
@@ -316,6 +258,6 @@ export async function getCollectionStructure({
     return { nodes: allCollections };
   } catch (error) {
     console.error('Error in getCollectionStructure:', error);
-    return { nodes: [] };
+    throw error;
   }
 }

@@ -71,7 +71,10 @@ function App() {
             'Anlagenmechaniker-IH04-03-25-idF-18-02-23_Anlagenmechaniker_Anlagenmechanikerin.json',
             'Aenderungsschneider.pdf_converted_Änderungsschneider_Änderungsschneiderin.json',
             'Anlagenmechaniker_SHK_16-01-29-E.pdf_converted_Anlagenmechaniker_für_Sanitär-__Heizungs-_und_Klimatechnik_Anlagenmechanikerin_für_Sanitär-__Heizungs-_und_Klimatechnik.json',
-            'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json'
+            'Asphaltbauer84-02-10.pdf_converted_Asphaltbauer_Asphaltbauerin.json',
+            'Aufbereitungsmechaniker92-04-29.pdf_converted_Aufbereitungsmechaniker_Aufbereitungsmechanikerin.json',
+            'Augenoptiker11-03-25-E_01.pdf_converted_Augenoptiker_Augenoptikerin.json',
+            'Ausbaufacharbeiter.pdf_converted_Ausbaufacharbeiter_-in.json'
           ];
           
           // The paths to check
@@ -103,7 +106,10 @@ function App() {
             setSelectedFile(foundFiles[0]);
             loadJsonFile(foundFiles[0]);
           } else {
-            setLoadingError("Keine Lehrplan-JSON-Dateien gefunden. Versuche, eine JSON-Datei hochzuladen.");
+            // Last resort - just use the hardcoded list
+            setJsonFiles(knownFiles);
+            setSelectedFile(knownFiles[0]);
+            loadJsonFile(knownFiles[0]);
           }
         } catch (fallbackError) {
           console.error('All file detection methods failed:', fallbackError);
@@ -129,7 +135,24 @@ function App() {
       setLoading(true);
       setLoadingError(null);
       
-      // Try multiple potential paths where the file might be found
+      // First try the dedicated API endpoint
+      try {
+        console.log(`Trying API endpoint for JSON file: ${filename}`);
+        const apiResponse = await fetch(`/api/json/${filename}`);
+        
+        if (apiResponse.ok) {
+          const jsonData = await apiResponse.json();
+          console.log("Successfully loaded JSON data from API endpoint");
+          processJsonData(jsonData);
+          return;
+        } else {
+          console.log(`API endpoint failed with status: ${apiResponse.status}`);
+        }
+      } catch (apiError) {
+        console.log("API endpoint failed:", apiError);
+      }
+      
+      // If API endpoint failed, try multiple potential paths directly
       const potentialPaths = [
         `/json/${filename}`,
         `/public/json/${filename}`
@@ -158,15 +181,33 @@ function App() {
       
       console.log(`Successfully loaded JSON from: ${successPath}`);
       
-      const jsonData = await jsonResponse.json();
-      console.log("Raw JSON data loaded:", Object.keys(jsonData));
-      
+      try {
+        const jsonData = await jsonResponse.json();
+        processJsonData(jsonData);
+      } catch (parseError) {
+        console.error("JSON parse error:", parseError);
+        throw new Error(`Fehler beim Parsen der JSON-Datei. Ungültiges JSON-Format: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+      }
+    } catch (error) {
+      console.error('Error loading JSON file:', error);
+      setLoadingError(`Fehler beim Laden der JSON-Datei: ${error instanceof Error ? error.message : String(error)}`);
+      setCurriculumData(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Process the loaded JSON data
+  const processJsonData = (jsonData: any) => {
+    console.log("Raw JSON data loaded:", Object.keys(jsonData));
+    
+    try {
       const parsedData = parseCurriculum(jsonData);
       
       console.log("Geladene Lehrplandaten:", parsedData);
       
       if (!parsedData || !parsedData.learningFields || parsedData.learningFields.length === 0) {
-        setLoadingError("Die geladene JSON-Datei enthält keine gültigen Lehrplandaten.");
+        setLoadingError("Die geladene JSON-Datei enthält keine gültigen Lehrplandaten. Es wurden keine Lernfelder gefunden.");
         setCurriculumData(null);
       } else {
         setCurriculumData(parsedData);
@@ -179,12 +220,10 @@ function App() {
           console.log("Erstes Lernfeld:", parsedData.learningFields[0]);
         }
       }
-    } catch (error) {
-      console.error('Error loading JSON file:', error);
-      setLoadingError(`Fehler beim Laden der JSON-Datei: ${error instanceof Error ? error.message : String(error)}`);
+    } catch (parseError) {
+      console.error("Error parsing curriculum:", parseError);
+      setLoadingError(`Fehler beim Parsen der Lehrplandaten: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       setCurriculumData(null);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -194,11 +233,23 @@ function App() {
       const reader = new FileReader();
       reader.onload = (e) => {
         try {
-          const data = JSON.parse(e.target?.result as string);
+          const jsonString = e.target?.result as string;
+          // Basic validation to catch obvious non-JSON files
+          if (!jsonString.trim().startsWith('{')) {
+            throw new Error("Die hochgeladene Datei scheint kein gültiges JSON-Format zu haben.");
+          }
+          
+          const data = JSON.parse(jsonString);
+          
+          // Additional validation on parsed data
+          if (!data || typeof data !== 'object') {
+            throw new Error("Die hochgeladene Datei hat kein gültiges JSON-Format.");
+          }
+          
           const parsedData = parseCurriculum(data);
           
           if (!parsedData || !parsedData.learningFields || parsedData.learningFields.length === 0) {
-            setLoadingError("Die hochgeladene JSON-Datei enthält keine gültigen Lehrplandaten.");
+            setLoadingError("Die hochgeladene JSON-Datei enthält keine gültigen Lehrplandaten oder keine Lernfelder.");
             setCurriculumData(null);
           } else {
             setCurriculumData(parsedData);
@@ -212,6 +263,9 @@ function App() {
           setLoadingError(`Fehler beim Parsen der JSON-Datei: ${error instanceof Error ? error.message : String(error)}`);
           setCurriculumData(null);
         }
+      };
+      reader.onerror = (error) => {
+        setLoadingError("Fehler beim Lesen der Datei");
       };
       reader.readAsText(file);
     }
@@ -268,12 +322,6 @@ function App() {
                     'Lernressource'
       }));
 
-      // Check if this is mock data by examining the IDs
-      const isMockData = metadata.some(item => item.refId?.startsWith('mock-id'));
-      if (isMockData) {
-        setApiError("Hinweis: Die Verbindung zum WLO-Server konnte nicht hergestellt werden. Es werden Beispieldaten angezeigt.");
-      }
-
       setSearchResults(metadata);
       console.log(`Found ${metadata.length} results`);
     } catch (error) {
@@ -295,7 +343,7 @@ function App() {
         
         // If it's a 500 error, suggest retrying
         if (error.response.status === 500) {
-          errorMessage += " - Der Server hat einen internen Fehler. Beispieldaten werden angezeigt.";
+          errorMessage += " - Der Server hat einen internen Fehler.";
         }
       } else {
         errorMessage = `Fehler bei der Suche: ${errorMessage}`;
@@ -311,13 +359,26 @@ function App() {
 
   // Extract relevant search terms from competency data
   const extractSearchTerm = (competency: Competency): string => {
-    // Use the full title without truncation
+    // Use the title as the primary search term
     let searchTerm = competency.title;
     
-    // Only remove articles at the beginning, but keep the rest of the text
+    // Remove articles at the beginning
     searchTerm = searchTerm.replace(/^(die|der|das|den|dem|ein|eine|einer|eines|zum)\s+/i, '');
     
-    console.log(`Extracted search term for "${competency.title}": "${searchTerm}"`);
+    // If there are ESCO mappings with high confidence, add the first one to improve search
+    if (competency.escoMappings && competency.escoMappings.length > 0) {
+      // Sort by confidence if available
+      const sortedMappings = [...competency.escoMappings].sort(
+        (a, b) => (b.confidence || 0) - (a.confidence || 0)
+      );
+      
+      // Add the most relevant ESCO term if it's not too long
+      if (sortedMappings[0].preferredLabel.length < 30) {
+        searchTerm = `${searchTerm} ${sortedMappings[0].preferredLabel}`;
+      }
+    }
+    
+    console.log(`Search term for "${competency.title}": "${searchTerm}"`);
     return searchTerm;
   };
 
@@ -390,7 +451,7 @@ function App() {
               />
             </div>
             
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <label className="cursor-pointer flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
                 <Upload className="w-5 h-5" />
                 <span>Upload JSON</span>

@@ -15,8 +15,8 @@ const serveJsonFiles = () => {
         if (req.url?.startsWith('/json/')) {
           try {
             // Handle both json directory and public/json directory
-            const jsonPath = resolve(__dirname, 'json', req.url.slice(6));
-            const publicJsonPath = resolve(__dirname, 'public', req.url);
+            const jsonPath = resolve(__dirname, '..', 'json', req.url.slice(6));
+            const publicJsonPath = resolve(__dirname, '..', 'public', req.url);
             
             let filePath = '';
             
@@ -51,28 +51,24 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Verwende die genaue Proxy-Pfad-Konfiguration aus dem alten Code
       '^/api/edu-sharing/rest/': {
         target: 'https://redaktion.openeduhub.net',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
-        configure: (proxy) => {
-          // Füge CORS-Header hinzu
-          proxy.on('proxyRes', (proxyRes) => {
+        configure: (proxy, options) => {
+          // Add CORS headers in development
+          proxy.on('proxyRes', (proxyRes, req, res) => {
             proxyRes.headers['Access-Control-Allow-Origin'] = '*';
           });
-          // Füge Fehlerprotokollierung hinzu
+          
+          // Add error handling
           proxy.on('error', (err) => {
-            console.log('Proxy error:', err);
+            console.error('Vite proxy error:', err);
           });
-        },
-        headers: {
-          'User-Agent': 'WLO-KI-Editor'
-        },
-        timeout: 60000  // 60 Sekunden Timeout
+        }
       }
     },
-    open: true // Automatisch Browser öffnen
+    open: true
   },
   resolve: {
     alias: {

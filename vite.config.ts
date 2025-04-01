@@ -15,8 +15,8 @@ const serveJsonFiles = () => {
         if (req.url?.startsWith('/json/')) {
           try {
             // Handle both json directory and public/json directory
-            const jsonPath = resolve(__dirname, '..', 'json', req.url.slice(6));
-            const publicJsonPath = resolve(__dirname, '..', 'public', req.url);
+            const jsonPath = resolve(__dirname, 'json', req.url.slice(6));
+            const publicJsonPath = resolve(__dirname, 'public', req.url);
             
             let filePath = '';
             
@@ -61,13 +61,14 @@ export default defineConfig({
             proxyRes.headers['Access-Control-Allow-Origin'] = '*';
           });
           
+          // Add error handling
           proxy.on('error', (err) => {
-            console.log('Proxy error:', err);
+            console.error('Vite proxy error:', err);
           });
         }
       }
     },
-    open: true // Automatically open the browser
+    open: true
   },
   resolve: {
     alias: {

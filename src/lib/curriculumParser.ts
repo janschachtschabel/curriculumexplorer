@@ -2,50 +2,37 @@ import { CurriculumData, LearningField, Competency } from './curriculumTypes';
 
 export function parseCurriculum(jsonData: any): CurriculumData {
   try {
-    console.log("Parsen der Lehrplandaten gestartet:", JSON.stringify(jsonData).substring(0, 200) + "...");
+    console.log("Parsen der Lehrplandaten gestartet - Schema-Erkennung:", 
+      Object.keys(jsonData).join(', ').substring(0, 100) + "...");
+    
+    // Determine the schema type to use appropriate parsing logic
+    const schemaType = detectSchemaType(jsonData);
+    console.log(`Erkanntes Schema: ${schemaType}`);
     
     // Capture metadata, esco, and mappings for reference
-    const documentMetadata = jsonData.metadata || {};
+    const documentMetadata = jsonData.metadata || jsonData.document_metadata || {};
     const escoData = jsonData.esco || {};
-    const kldbMapping = jsonData.document_data?.kldb_mapping || '';
-    const iscoMapping = jsonData.document_data?.isco_mapping || {};
+    const kldbMapping = extractKldbMapping(jsonData);
+    const iscoMapping = extractIscoMapping(jsonData);
     
-    // Handle Anlagenmechaniker format which has document_data structure
-    const data = jsonData.document_data || jsonData;
-    
-    // Parse basic curriculum information
+    // Create the base curriculum object with common properties
     const curriculum: CurriculumData = {
-      id: jsonData.id || jsonData.kennung || generateId(),
-      title: jsonData.title || jsonData.titel || jsonData.name || 'Unbenannter Lehrplan',
-      description: jsonData.description || jsonData.beschreibung || '',
+      id: extractId(jsonData),
+      title: extractTitle(jsonData),
+      description: extractDescription(jsonData),
       profession: {
-        title: data.beruf || data.profession?.title || data.profession?.name || 
-               data.beruf?.bezeichnung || data.beruf?.title || 
-               data.ausbildungsberuf?.bezeichnung || data.rahmenlehrplan?.beruf?.bezeichnung || 
-               'Unbekannter Beruf',
-        code: data.beruf_code || data.profession?.code || data.beruf?.kennziffer || 
-              data.beruf?.code || data.ausbildungsberuf?.kennung || 
-              data.rahmenlehrplan?.beruf?.kennziffer || '',
-        description: data.berufsbeschreibung || data.profession?.description || data.beruf?.beschreibung || 
-                    data.ausbildungsberuf?.beschreibung || data.rahmenlehrplan?.beruf?.beschreibung || '',
-        duration: data.ausbildungsdauer || data.profession?.duration || data.beruf?.ausbildungsdauer || 
-                 data.ausbildungsberuf?.dauer || data.rahmenlehrplan?.beruf?.ausbildungsdauer || '',
-        field: data.berufsfeld || data.profession?.field || data.beruf?.berufsfeld || 
-               data.ausbildungsberuf?.berufsfeld || data.rahmenlehrplan?.beruf?.berufsfeld || '',
+        title: extractProfessionTitle(jsonData),
+        code: extractProfessionCode(jsonData),
+        description: extractProfessionDescription(jsonData),
+        duration: extractProfessionDuration(jsonData),
+        field: extractProfessionField(jsonData),
       },
-      trainingYears: data.ausbildungsjahre || jsonData.trainingYears || jsonData.ausbildungsjahre || 
-                    jsonData.dauer || parseFloat(jsonData.profession?.duration) || 
-                    jsonData.rahmenlehrplan?.ausbildungsdauer || 3,
-      totalHours: data.gesamtstunden || jsonData.totalHours || jsonData.gesamtstunden || 
-                 jsonData.rahmenlehrplan?.gesamtstunden || 0,
-      issueDate: data.ausgabedatum || jsonData.issueDate || jsonData.ausgabedatum || jsonData.datum || 
-                jsonData.rahmenlehrplan?.datum || '',
-      validFrom: data.gueltigAb || jsonData.validFrom || jsonData.gültigAb || jsonData.gueltigAb || 
-                jsonData.rahmenlehrplan?.gueltigAb || '',
-      validUntil: data.gueltigBis || jsonData.validUntil || jsonData.gültigBis || jsonData.gueltigBis || 
-                 jsonData.rahmenlehrplan?.gueltigBis || '',
-      publisher: data.herausgeber || jsonData.publisher || jsonData.herausgeber || 
-                jsonData.rahmenlehrplan?.herausgeber || '',
+      trainingYears: extractTrainingYears(jsonData),
+      totalHours: extractTotalHours(jsonData),
+      issueDate: extractIssueDate(jsonData),
+      validFrom: extractValidFrom(jsonData),
+      validUntil: extractValidUntil(jsonData),
+      publisher: extractPublisher(jsonData),
       learningFields: [],
       competencies: [],
       documentMetadata,
@@ -54,530 +41,394 @@ export function parseCurriculum(jsonData: any): CurriculumData {
       iscoMapping
     };
 
-    // Special case for Anlagenmechaniker format with lernfeld_ausbildungsteil
-    if (Array.isArray(data.lernfeld_ausbildungsteil)) {
-      const learningFields = data.lernfeld_ausbildungsteil.map((field: any, index: number) => {
-        console.log(`Verarbeite Lernfeld ${index + 1} (Anlagenmechaniker Format):`, field.name || "Unbenannt");
-        
-        // Process time value which might be in zeitwert object or directly as string
-        let hoursValue = 0;
-        if (field.zeitwert && field.zeitwert.wert) {
-          hoursValue = parseInt(field.zeitwert.wert, 10) || 0;
-        } else if (field.stunden) {
-          hoursValue = parseInt(field.stunden, 10) || 0;
-        } else if (field.zeitrichtwert) {
-          hoursValue = parseInt(field.zeitrichtwert, 10) || 0;
-        }
-        
-        // Process year from zeitraum if available
-        let yearValue = 1;
-        if (field.zeitraum && typeof field.zeitraum === 'string') {
-          const match = field.zeitraum.match(/(\d+)/);
-          if (match && match[1]) {
-            yearValue = parseInt(match[1], 10);
+    // Parse learning fields based on the detected schema
+    let learningFields: LearningField[] = [];
+    
+    if (schemaType === 'ANLAGENMECHANIKER') {
+      learningFields = parseAnlagenmechanikerFormat(jsonData);
+    } else if (schemaType === 'STANDARD') {
+      learningFields = parseStandardFormat(jsonData);
+    } else if (schemaType === 'NESTED') {
+      learningFields = parseNestedFormat(jsonData);
+    } else {
+      // Fallback to trying all possible formats
+      learningFields = findLearningFieldsAnyFormat(jsonData);
+    }
+    
+    // Store the learning fields
+    curriculum.learningFields = learningFields;
+    
+    // Create flat list of all competencies
+    const allCompetencies: Competency[] = [];
+    learningFields.forEach(field => {
+      field.competencies.forEach(comp => {
+        // Ensure parent ID is set
+        comp.parentId = field.id;
+        allCompetencies.push(comp);
+      });
+    });
+    
+    curriculum.competencies = allCompetencies;
+    
+    // Generate metadata about the curriculum
+    generateCurriculumMetadata(curriculum);
+    
+    console.log(`Lehrplanparsen abgeschlossen: ${curriculum.learningFields.length} Lernfelder, ${curriculum.competencies.length} Kompetenzen gefunden`);
+    
+    return curriculum;
+  } catch (error) {
+    console.error('Error parsing curriculum data:', error);
+    throw new Error(`Fehler beim Parsen der Lehrplandaten: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+// Detect the schema type to use appropriate parsing logic
+function detectSchemaType(jsonData: any): 'ANLAGENMECHANIKER' | 'STANDARD' | 'NESTED' | 'UNKNOWN' {
+  // Check for Anlagenmechaniker format (with lernfeld_ausbildungsteil or document_data)
+  if (Array.isArray(jsonData.lernfeld_ausbildungsteil) || 
+      (jsonData.document_data && jsonData.document_data.lernfeld_ausbildungsteil)) {
+    return 'ANLAGENMECHANIKER';
+  }
+  
+  // Check for standard format with top-level learningFields or lernfelder
+  if (Array.isArray(jsonData.learningFields) || Array.isArray(jsonData.lernfelder)) {
+    return 'STANDARD';
+  }
+  
+  // Check for nested format with curriculum or rahmenlehrplan containing fields
+  if ((jsonData.curriculum && (jsonData.curriculum.learningFields || jsonData.curriculum.lernfelder)) ||
+      (jsonData.rahmenlehrplan && (jsonData.rahmenlehrplan.lernfelder || jsonData.rahmenlehrplan.inhalte))) {
+    return 'NESTED';
+  }
+  
+  // If we can't determine the schema, return UNKNOWN
+  return 'UNKNOWN';
+}
+
+// Extract KLDB mapping from various possible locations
+function extractKldbMapping(jsonData: any): string {
+  return jsonData.document_data?.kldb_mapping || 
+         jsonData.kldb_mapping || 
+         jsonData.beruf_code || 
+         jsonData.profession?.code || 
+         '';
+}
+
+// Extract ISCO mapping from various possible locations
+function extractIscoMapping(jsonData: any): any {
+  return jsonData.document_data?.isco_mapping || 
+         jsonData.isco_mapping || 
+         {};
+}
+
+// Extract ID from various possible locations
+function extractId(jsonData: any): string {
+  return jsonData.id || 
+         jsonData.kennung || 
+         jsonData.curriculum?.id || 
+         jsonData.document_data?.id || 
+         generateId();
+}
+
+// Extract title from various possible locations
+function extractTitle(jsonData: any): string {
+  return jsonData.title || 
+         jsonData.titel || 
+         jsonData.name || 
+         jsonData.curriculum?.title || 
+         jsonData.document_data?.title || 
+         'Unbenannter Lehrplan';
+}
+
+// Extract description from various possible locations
+function extractDescription(jsonData: any): string {
+  return jsonData.description || 
+         jsonData.beschreibung || 
+         jsonData.curriculum?.description || 
+         jsonData.document_data?.description || 
+         '';
+}
+
+// Extract profession title from various possible locations
+function extractProfessionTitle(jsonData: any): string {
+  return jsonData.beruf || 
+         jsonData.profession?.title || 
+         jsonData.profession?.name || 
+         jsonData.beruf?.bezeichnung || 
+         jsonData.beruf?.title || 
+         jsonData.ausbildungsberuf?.bezeichnung || 
+         jsonData.rahmenlehrplan?.beruf?.bezeichnung || 
+         jsonData.document_data?.beruf || 
+         'Unbekannter Beruf';
+}
+
+// Extract profession code from various possible locations
+function extractProfessionCode(jsonData: any): string {
+  return jsonData.beruf_code || 
+         jsonData.profession?.code || 
+         jsonData.beruf?.kennziffer || 
+         jsonData.beruf?.code || 
+         jsonData.ausbildungsberuf?.kennung || 
+         jsonData.rahmenlehrplan?.beruf?.kennziffer || 
+         jsonData.document_data?.beruf_code || 
+         '';
+}
+
+// Extract profession description from various possible locations
+function extractProfessionDescription(jsonData: any): string {
+  return jsonData.berufsbeschreibung || 
+         jsonData.profession?.description || 
+         jsonData.beruf?.beschreibung || 
+         jsonData.ausbildungsberuf?.beschreibung || 
+         jsonData.rahmenlehrplan?.beruf?.beschreibung || 
+         jsonData.document_data?.berufsbeschreibung || 
+         '';
+}
+
+// Extract profession duration from various possible locations
+function extractProfessionDuration(jsonData: any): string {
+  return jsonData.ausbildungsdauer || 
+         jsonData.profession?.duration || 
+         jsonData.beruf?.ausbildungsdauer || 
+         jsonData.ausbildungsberuf?.dauer || 
+         jsonData.rahmenlehrplan?.beruf?.ausbildungsdauer || 
+         jsonData.document_data?.ausbildungsdauer || 
+         '';
+}
+
+// Extract profession field from various possible locations
+function extractProfessionField(jsonData: any): string {
+  return jsonData.berufsfeld || 
+         jsonData.profession?.field || 
+         jsonData.beruf?.berufsfeld || 
+         jsonData.ausbildungsberuf?.berufsfeld || 
+         jsonData.rahmenlehrplan?.beruf?.berufsfeld || 
+         jsonData.document_data?.berufsfeld || 
+         '';
+}
+
+// Extract training years from various possible locations
+function extractTrainingYears(jsonData: any): number {
+  const years = jsonData.ausbildungsjahre || 
+                jsonData.trainingYears || 
+                jsonData.ausbildungsjahre || 
+                jsonData.dauer || 
+                parseFloat(jsonData.profession?.duration) || 
+                jsonData.rahmenlehrplan?.ausbildungsdauer || 
+                jsonData.document_data?.ausbildungsjahre || 
+                3;
+                
+  // If it's a string like "3 Jahre", extract just the number
+  if (typeof years === 'string') {
+    const match = years.match(/(\d+)/);
+    if (match && match[1]) {
+      return parseInt(match[1], 10);
+    }
+  }
+  
+  return Number(years) || 3;
+}
+
+// Extract total hours from various possible locations
+function extractTotalHours(jsonData: any): number {
+  return jsonData.gesamtstunden || 
+         jsonData.totalHours || 
+         jsonData.gesamtstunden || 
+         jsonData.rahmenlehrplan?.gesamtstunden || 
+         jsonData.document_data?.gesamtstunden || 
+         0;
+}
+
+// Extract issue date from various possible locations
+function extractIssueDate(jsonData: any): string {
+  return jsonData.ausgabedatum || 
+         jsonData.issueDate || 
+         jsonData.ausgabedatum || 
+         jsonData.datum || 
+         jsonData.rahmenlehrplan?.datum || 
+         jsonData.document_data?.ausgabedatum || 
+         '';
+}
+
+// Extract valid from date from various possible locations
+function extractValidFrom(jsonData: any): string {
+  return jsonData.gueltigAb || 
+         jsonData.validFrom || 
+         jsonData.gültigAb || 
+         jsonData.gueltigAb || 
+         jsonData.rahmenlehrplan?.gueltigAb || 
+         jsonData.document_data?.gueltigAb || 
+         '';
+}
+
+// Extract valid until date from various possible locations
+function extractValidUntil(jsonData: any): string {
+  return jsonData.gueltigBis || 
+         jsonData.validUntil || 
+         jsonData.gültigBis || 
+         jsonData.gueltigBis || 
+         jsonData.rahmenlehrplan?.gueltigBis || 
+         jsonData.document_data?.gueltigBis || 
+         '';
+}
+
+// Extract publisher from various possible locations
+function extractPublisher(jsonData: any): string {
+  return jsonData.herausgeber || 
+         jsonData.publisher || 
+         jsonData.herausgeber || 
+         jsonData.rahmenlehrplan?.herausgeber || 
+         jsonData.document_data?.herausgeber || 
+         '';
+}
+
+// Parse the Anlagenmechaniker format
+function parseAnlagenmechanikerFormat(jsonData: any): LearningField[] {
+  console.log("Parsing Anlagenmechaniker format...");
+  
+  // Get the learning fields array from the right location
+  const lernfelder = jsonData.lernfeld_ausbildungsteil || 
+                   jsonData.document_data?.lernfeld_ausbildungsteil || 
+                   [];
+  
+  if (!Array.isArray(lernfelder) || lernfelder.length === 0) {
+    console.warn("Keine Lernfelder im Anlagenmechaniker-Format gefunden");
+    return [];
+  }
+  
+  return lernfelder.map((field: any, index: number) => {
+    console.log(`Verarbeite Lernfeld ${index + 1} (Anlagenmechaniker Format):`, field.name || "Unbenannt");
+    
+    // Process time value which might be in zeitwert object or directly as string
+    let hoursValue = 0;
+    if (field.zeitwert && field.zeitwert.wert) {
+      hoursValue = parseInt(field.zeitwert.wert, 10) || 0;
+    } else if (field.stunden) {
+      hoursValue = parseInt(field.stunden, 10) || 0;
+    } else if (field.zeitrichtwert) {
+      hoursValue = parseInt(field.zeitrichtwert, 10) || 0;
+    }
+    
+    // Process year from zeitraum if available
+    let yearValue = 1;
+    if (field.zeitraum && typeof field.zeitraum === 'string') {
+      const match = field.zeitraum.match(/(\d+)/);
+      if (match && match[1]) {
+        yearValue = parseInt(match[1], 10);
+      }
+    } else if (field.ausbildungsjahr) {
+      yearValue = parseInt(field.ausbildungsjahr, 10) || 1;
+    }
+    
+    const parsedField: LearningField = {
+      id: field.id || `lf${field.nummer || (index + 1)}`,
+      code: `LF${field.nummer || (index + 1)}`,
+      title: field.name || field.titel || field.bezeichnung || `Lernfeld ${field.nummer || (index + 1)}`,
+      description: field.beschreibung || field.text || field.inhalt || '',
+      hours: hoursValue,
+      year: yearValue,
+      schwerpunkt: field.schwerpunkt || field.fokus || '',
+      zeitraum: field.zeitraum || '',
+      competencies: []
+    };
+    
+    // Process competencies
+    if (Array.isArray(field.kompetenzen)) {
+      parsedField.competencies = field.kompetenzen.map((comp: any, cIndex: number) => {
+        const competency: Competency = {
+          id: comp.id || `${parsedField.id}-k${comp.nummer || (cIndex + 1)}`,
+          code: comp.nummer || `K${cIndex + 1}`,
+          title: comp.text || comp.titel || comp.name || `Kompetenz ${cIndex + 1}`,
+          description: comp.text || comp.beschreibung || comp.inhalt || '',
+          competencyType: comp.typ || comp.art || 'Fachkompetenz',
+          parentId: parsedField.id,
+          escoMappings: [],
+          competencyAnalysis: {
+            skillType: ''
           }
-        } else if (field.ausbildungsjahr) {
-          yearValue = parseInt(field.ausbildungsjahr, 10) || 1;
-        }
-        
-        const parsedField: LearningField = {
-          id: field.id || `lf${field.nummer || (index + 1)}`,
-          code: `LF${field.nummer || (index + 1)}`,
-          title: field.name || field.titel || field.bezeichnung || `Lernfeld ${field.nummer || (index + 1)}`,
-          description: field.beschreibung || field.text || field.inhalt || '',
-          hours: hoursValue,
-          year: yearValue,
-          schwerpunkt: field.schwerpunkt || field.fokus || '',
-          zeitraum: field.zeitraum || '',
-          competencies: []
         };
         
-        // Process competencies
-        if (Array.isArray(field.kompetenzen)) {
-          field.kompetenzen.forEach((comp: any, cIndex: number) => {
-            const competency: Competency = {
-              id: comp.id || `${parsedField.id}-k${comp.nummer || (cIndex + 1)}`,
-              code: comp.nummer || `K${cIndex + 1}`,
-              title: comp.text || comp.titel || comp.name || `Kompetenz ${cIndex + 1}`,
-              description: comp.text || comp.beschreibung || comp.inhalt || '',
-              competencyType: comp.typ || comp.art || 'Fachkompetenz',
-              parentId: parsedField.id,
-              escoMappings: [],
-              competencyAnalysis: {
-                skillType: ''
-              }
+        // For title, if we're using the text field which might be long, trim it
+        if (competency.title === comp.text && comp.text && comp.text.length > 50) {
+          competency.title = comp.text.substring(0, 50) + '...';
+        }
+        
+        // Process ESCO mappings from skills array
+        if (Array.isArray(comp.skills)) {
+          competency.escoMappings = comp.skills.map((skill: any, sIndex: number) => ({
+            id: skill.id || `esco-${sIndex}`,
+            uri: skill.uri || '',
+            preferredLabel: skill.name || '',
+            description: skill.description?.literal || skill.description || '',
+            confidence: skill.relevance ? skill.relevance / 5 : 0.8, // Convert 1-5 scale to 0-1
+            altLabels: []
+          }));
+          
+          // Extract competence analysis from skills
+          if (comp.competence_analysis) {
+            competency.competencyAnalysis = {
+              skillType: comp.competence_analysis.kompetenzdimension || comp.competence_analysis.lernzielbereich || '',
+              lernzielbereich: comp.competence_analysis.lernzielbereich || '',
+              bloomLevel: comp.competence_analysis.taxonomiestufe_bezeichnung || '',
+              difficulty: comp.competence_analysis.taxonomiestufe || 0,
+              relevance: 0,
+              digitalLevel: 0
             };
-            
-            // For title, if we're using the text field which might be long, trim it
-            if (competency.title === comp.text && comp.text && comp.text.length > 50) {
-              competency.title = comp.text.substring(0, 50) + '...';
-            }
-            
-            // Process ESCO mappings from skills array
-            if (Array.isArray(comp.skills)) {
-              competency.escoMappings = comp.skills.map((skill: any, sIndex: number) => ({
-                id: skill.id || `esco-${sIndex}`,
-                uri: skill.uri || '',
-                preferredLabel: skill.name || '',
-                description: skill.description?.literal || skill.description || '',
-                confidence: skill.relevance ? skill.relevance / 5 : 0.8, // Convert 1-5 scale to 0-1
-                altLabels: []
-              }));
-              
-              // Extract competence analysis from skills
-              if (comp.competence_analysis) {
-                competency.competencyAnalysis = {
-                  skillType: comp.competence_analysis.kompetenzdimension || comp.competence_analysis.lernzielbereich || '',
-                  lernzielbereich: comp.competence_analysis.lernzielbereich || '',
-                  bloomLevel: comp.competence_analysis.taxonomiestufe_bezeichnung || '',
-                  difficulty: comp.competence_analysis.taxonomiestufe || 0,
-                  relevance: 0,
-                  digitalLevel: 0
-                };
-              }
-              
-              // If no competence_analysis, try to fill from skill info
-              if (!competency.competencyAnalysis.skillType && comp.skills.length > 0) {
-                const firstSkill = comp.skills[0];
-                competency.competencyAnalysis = {
-                  skillType: firstSkill.skillType || 'Fachkompetenz',
-                  bloomLevel: '',
-                  relevance: firstSkill.relevance || 0,
-                  difficulty: 0,
-                  digitalLevel: 0
-                };
-              }
-            }
-            
-            parsedField.competencies.push(competency);
-          });
-        }
-        
-        return parsedField;
-      });
-      
-      curriculum.learningFields = learningFields;
-      
-      // Create flat list of all competencies
-      curriculum.competencies = learningFields.reduce((acc, field) => {
-        return [...acc, ...field.competencies];
-      }, []);
-      
-      // Check if there's competence_analysis at the top level
-      if (jsonData.competence_analysis && typeof jsonData.competence_analysis === 'object') {
-        // Map global competence analysis to competencies if they match by title
-        Object.entries(jsonData.competence_analysis).forEach(([title, analysis]) => {
-          const matchingCompetencies = curriculum.competencies.filter(comp => 
-            comp.title === title || comp.description.startsWith(title)
-          );
+          }
           
-          matchingCompetencies.forEach(comp => {
-            if (typeof analysis === 'object') {
-              comp.competencyAnalysis = {
-                skillType: (analysis as any).kompetenzdimension || (analysis as any).lernzielbereich || comp.competencyAnalysis?.skillType || '',
-                lernzielbereich: (analysis as any).lernzielbereich || comp.competencyAnalysis?.lernzielbereich || '',
-                bloomLevel: (analysis as any).taxonomiestufe_bezeichnung || comp.competencyAnalysis?.bloomLevel || '',
-                difficulty: (analysis as any).taxonomiestufe || comp.competencyAnalysis?.difficulty || 0,
-                relevance: comp.competencyAnalysis?.relevance || 0,
-                digitalLevel: comp.competencyAnalysis?.digitalLevel || 0
-              };
-            }
-          });
-        });
-      }
-      
-      // Generate metadata
-      const competencyCount = curriculum.competencies.length;
-      const escoMappingCount = curriculum.competencies.reduce((count, comp) => 
-        count + (comp.escoMappings?.length || 0), 0);
-        
-      const digitalCompetencyCount = curriculum.competencies.filter(comp => 
-        (comp.competencyAnalysis?.digitalLevel || 0) > 2).length;
-        
-      const competencyTypeDistribution: Record<string, number> = {};
-      curriculum.competencies.forEach(comp => {
-        if (comp.competencyType) {
-          competencyTypeDistribution[comp.competencyType] = 
-            (competencyTypeDistribution[comp.competencyType] || 0) + 1;
+          // If no competence_analysis, try to fill from skill info
+          if (!competency.competencyAnalysis.skillType && comp.skills.length > 0) {
+            const firstSkill = comp.skills[0];
+            competency.competencyAnalysis = {
+              skillType: firstSkill.skillType || 'Fachkompetenz',
+              bloomLevel: '',
+              relevance: firstSkill.relevance || 0,
+              difficulty: 0,
+              digitalLevel: 0
+            };
+          }
         }
+        
+        return competency;
       });
-      
-      const bloomLevelDistribution: Record<string, number> = {};
-      curriculum.competencies.forEach(comp => {
-        if (comp.competencyAnalysis?.bloomLevel) {
-          bloomLevelDistribution[comp.competencyAnalysis.bloomLevel] = 
-            (bloomLevelDistribution[comp.competencyAnalysis.bloomLevel] || 0) + 1;
-        }
-      });
-      
-      curriculum.metadata = {
-        competencyCount,
-        escoMappingCount,
-        digitalCompetencyCount,
-        averageCompetenciesPerField: curriculum.learningFields.length > 0 
-          ? competencyCount / curriculum.learningFields.length 
-          : 0,
-        competencyTypeDistribution,
-        bloomLevelDistribution,
-      };
-      
-      console.log("Anlagenmechaniker Lehrplanparsen abgeschlossen, gefunden:", {
-        lernfelder: curriculum.learningFields.length,
-        kompetenzen: competencyCount,
-        escoMappings: escoMappingCount
-      });
-      
-      return curriculum;
     }
+    
+    return parsedField;
+  });
+}
 
-    // Try to find learning fields in different possible locations and formats
-    let learningFields: any[] = [];
+// Parse the standard format
+function parseStandardFormat(jsonData: any): LearningField[] {
+  console.log("Parsing standard format...");
+  
+  // Get the learning fields array from the right location
+  const lernfelder = jsonData.learningFields || jsonData.lernfelder || [];
+  
+  if (!Array.isArray(lernfelder) || lernfelder.length === 0) {
+    console.warn("Keine Lernfelder im Standard-Format gefunden");
+    return [];
+  }
+  
+  return lernfelder.map((field: any, index: number) => {
+    console.log(`Verarbeite Lernfeld ${index + 1} (Standard Format):`, field.title || field.name || "Unbenannt");
     
-    // Check different possible property names for learning fields
-    const possibleFieldKeys = [
-      'learningFields', 'lernfelder', 'fields', 'felder', 'lf',
-      'curriculum.learningFields', 'curriculum.lernfelder', 
-      'rahmenlehrplan.lernfelder', 'rahmenlehrplan.inhalte'
-    ];
+    const parsedField: LearningField = {
+      id: field.id || `lf${index + 1}`,
+      code: field.code || field.nummer || `LF${index + 1}`,
+      title: field.title || field.name || field.titel || field.bezeichnung || `Lernfeld ${index + 1}`,
+      description: field.description || field.beschreibung || field.text || field.inhalt || '',
+      hours: parseInt(field.hours || field.stunden || 0, 10),
+      year: parseInt(field.year || field.jahr || field.ausbildungsjahr || 1, 10),
+      schwerpunkt: field.schwerpunkt || field.fokus || field.thema || '',
+      zeitraum: field.zeitraum || field.dauer || '',
+      competencies: []
+    };
     
-    for (const key of possibleFieldKeys) {
-      let data = jsonData;
-      
-      // Handle nested properties like 'curriculum.learningFields'
-      if (key.includes('.')) {
-        const parts = key.split('.');
-        let currentObj = jsonData;
-        let valid = true;
-        
-        for (const part of parts) {
-          if (currentObj && currentObj[part]) {
-            currentObj = currentObj[part];
-          } else {
-            valid = false;
-            break;
-          }
-        }
-        
-        if (valid) {
-          data = currentObj;
-        } else {
-          continue;
-        }
-      } else if (jsonData[key]) {
-        data = jsonData[key];
-      } else {
-        continue;
-      }
-      
-      // Check if we found an array of learning fields
-      if (Array.isArray(data)) {
-        learningFields = data;
-        console.log(`Gefunden: ${learningFields.length} Lernfelder in ${key}`);
-        break;
-      }
-      
-      // Special case: check if it's an object with numbered keys (1, 2, 3, etc.) or keys like lf1, lf2
-      if (typeof data === 'object' && !Array.isArray(data)) {
-        const fieldArray = [];
-        let isNumberedObject = false;
-        
-        for (const fieldKey in data) {
-          // Check if keys are numbers or "lf1", "lf2" format
-          if (/^\d+$/.test(fieldKey) || /^lf\d+$/i.test(fieldKey)) {
-            isNumberedObject = true;
-            const field = data[fieldKey];
-            
-            // Add the key as id or code if not present
-            if (typeof field === 'object') {
-              field.id = field.id || fieldKey;
-              field.code = field.code || fieldKey.replace(/^lf/i, 'LF');
-              if (/^\d+$/.test(fieldKey)) {
-                field.code = field.code || `LF${fieldKey}`;
-              }
-              fieldArray.push(field);
-            }
-          }
-        }
-        
-        if (isNumberedObject && fieldArray.length > 0) {
-          learningFields = fieldArray;
-          console.log(`Gefunden: ${learningFields.length} Lernfelder in ${key} (nummeriertes Objekt)`);
-          break;
-        }
-      }
-    }
+    // Process competencies
+    const competencies = field.competencies || field.kompetenzen || [];
     
-    // If standard methods failed, try more specific patterns for the Anlagenmechaniker format
-    if (learningFields.length === 0 && jsonData.rahmenlehrplan && jsonData.rahmenlehrplan.inhalte) {
-      const anlagenMechanikerLernfelder = [];
-      
-      // Process Anlagenmechaniker format with lernfelder in "inhalte"
-      for (const key in jsonData.rahmenlehrplan.inhalte) {
-        if (/^lernfeld\s*\d+$/i.test(key)) {
-          const fieldData = jsonData.rahmenlehrplan.inhalte[key];
-          const fieldNumber = key.match(/\d+/)?.[0] || '';
-          
-          const field = {
-            id: `lf${fieldNumber}`,
-            code: `LF${fieldNumber}`,
-            title: fieldData.titel || fieldData.bezeichnung || fieldData.name || '',
-            description: fieldData.beschreibung || fieldData.inhalt || '',
-            hours: fieldData.zeitrichtwert || fieldData.stunden || 0,
-            year: fieldData.ausbildungsjahr || fieldData.jahr || 1,
-            schwerpunkt: fieldData.schwerpunkt || fieldData.fokus || '',
-            competencies: []
-          };
-          
-          // Try to find competencies - they might be in 'zielformulierungen'
-          if (fieldData.zielformulierungen && typeof fieldData.zielformulierungen === 'object') {
-            for (const compKey in fieldData.zielformulierungen) {
-              const compData = fieldData.zielformulierungen[compKey];
-              if (typeof compData === 'object') {
-                field.competencies.push({
-                  id: `${field.id}-${compKey}`,
-                  title: compData.titel || compData.bezeichnung || 'Kompetenz',
-                  description: compData.text || compData.beschreibung || compData.inhalt || '',
-                  competencyType: compData.typ || compData.art || ''
-                });
-              } else if (typeof compData === 'string') {
-                // If it's a direct string, use it as description
-                field.competencies.push({
-                  id: `${field.id}-${compKey}`,
-                  title: `Kompetenz ${compKey}`,
-                  description: compData,
-                  competencyType: ''
-                });
-              }
-            }
-          }
-          
-          // If inhalte field has direct content information
-          if (fieldData.inhalte && typeof fieldData.inhalte === 'object') {
-            for (const contentKey in fieldData.inhalte) {
-              const contentItem = fieldData.inhalte[contentKey];
-              field.competencies.push({
-                id: `${field.id}-inhalt-${contentKey}`,
-                title: contentItem.titel || contentItem.thema || `Inhalt ${contentKey}`,
-                description: contentItem.text || contentItem.beschreibung || (typeof contentItem === 'string' ? contentItem : ''),
-                competencyType: 'Fachkompetenz'
-              });
-            }
-          }
-          
-          // Check direct fertigkeiten/kenntnisse keys
-          if (fieldData.fertigkeiten && Array.isArray(fieldData.fertigkeiten)) {
-            fieldData.fertigkeiten.forEach((fertigkeit, index) => {
-              field.competencies.push({
-                id: `${field.id}-fertigkeit-${index}`,
-                title: typeof fertigkeit === 'string' ? `Fertigkeit ${index+1}` : fertigkeit.titel || fertigkeit.bezeichnung,
-                description: typeof fertigkeit === 'string' ? fertigkeit : fertigkeit.text || fertigkeit.beschreibung,
-                competencyType: 'Fertigkeit'
-              });
-            });
-          }
-          
-          if (fieldData.kenntnisse && Array.isArray(fieldData.kenntnisse)) {
-            fieldData.kenntnisse.forEach((kenntnis, index) => {
-              field.competencies.push({
-                id: `${field.id}-kenntnis-${index}`,
-                title: typeof kenntnis === 'string' ? `Kenntnis ${index+1}` : kenntnis.titel || kenntnis.bezeichnung,
-                description: typeof kenntnis === 'string' ? kenntnis : kenntnis.text || kenntnis.beschreibung,
-                competencyType: 'Kenntnis'
-              });
-            });
-          }
-          
-          anlagenMechanikerLernfelder.push(field);
-        }
-      }
-      
-      if (anlagenMechanikerLernfelder.length > 0) {
-        learningFields = anlagenMechanikerLernfelder;
-        console.log(`Gefunden: ${learningFields.length} Lernfelder im Anlagenmechaniker-Format`);
-      }
-    }
-    
-    if (learningFields.length === 0) {
-      console.warn("Keine Lernfelder in den erwarteten Eigenschaften gefunden");
-      console.log("Verfügbare Top-Level-Eigenschaften:", Object.keys(jsonData));
-      
-      // Last resort: Try to find objects that might be learning fields based on properties
-      const allObjects = findAllObjects(jsonData);
-      const possibleFields = allObjects.filter(obj => 
-        (obj.titel || obj.title || obj.name || obj.bezeichnung) && 
-        (obj.id || obj.code || obj.nummer || obj.lernfeldnummer) &&
-        (obj.competencies || obj.kompetenzen || obj.skills || obj.zielformulierungen || obj.inhalte)
-      );
-      
-      if (possibleFields.length > 0) {
-        learningFields = possibleFields;
-        console.log(`Als letzten Ausweg gefunden: ${learningFields.length} mögliche Lernfelder durch Eigenschaftsanalyse`);
-      }
-    }
-
-    // Parse learning fields
-    let allCompetencies: Competency[] = [];
-    
-    curriculum.learningFields = learningFields.map((field, index) => {
-      console.log(`Verarbeite Lernfeld ${index + 1}:`, field.title || field.name || field.bezeichnung || field.titel || "Unbenannt");
-      
-      // Try to find competencies in different possible properties
-      const competencyKeys = [
-        'competencies', 'kompetenzen', 'skills', 'fertigkeiten', 'faehigkeiten', 
-        'fähigkeiten', 'zielformulierungen', 'lernziele'
-      ];
-      let competencies: any[] = [];
-      
-      for (const key of competencyKeys) {
-        if (Array.isArray(field[key])) {
-          competencies = field[key];
-          console.log(`  Gefunden: ${competencies.length} Kompetenzen in field.${key}`);
-          break;
-        } else if (field[key] && typeof field[key] === 'object') {
-          // Handle object form of competencies
-          const compArray = [];
-          for (const compKey in field[key]) {
-            const comp = field[key][compKey];
-            if (typeof comp === 'object') {
-              comp.id = comp.id || `${field.id}-${compKey}`;
-              comp.title = comp.title || comp.titel || comp.bezeichnung || `Kompetenz ${compKey}`;
-              comp.description = comp.description || comp.beschreibung || comp.text || comp.inhalt || '';
-              compArray.push(comp);
-            } else if (typeof comp === 'string') {
-              // For string values, create a minimal competency object
-              compArray.push({
-                id: `${field.id}-${compKey}`,
-                title: `Kompetenz ${compKey}`,
-                description: comp,
-                competencyType: ''
-              });
-            }
-          }
-          
-          if (compArray.length > 0) {
-            competencies = compArray;
-            console.log(`  Gefunden: ${competencies.length} Kompetenzen in field.${key} (objekt)`);
-            break;
-          }
-        }
-      }
-      
-      // Special case: check if competencies are in a numbered object (k1, k2, etc.)
-      if (competencies.length === 0) {
-        const compPatterns = [/^k\d+$/i, /^kompetenz\d+$/i, /^ziel\d+$/i, /^lernziel\d+$/i];
-        
-        for (const pattern of compPatterns) {
-          const compArray = [];
-          let found = false;
-          
-          for (const key in field) {
-            if (pattern.test(key)) {
-              found = true;
-              const comp = field[key];
-              if (typeof comp === 'object') {
-                comp.id = comp.id || `${field.id}-${key}`;
-                comp.title = comp.title || comp.titel || comp.bezeichnung || `Kompetenz ${key}`;
-                comp.description = comp.description || comp.beschreibung || comp.text || comp.inhalt || '';
-                compArray.push(comp);
-              } else if (typeof comp === 'string') {
-                compArray.push({
-                  id: `${field.id}-${key}`,
-                  title: `Kompetenz ${key.replace(/[^\d]/g, '')}`,
-                  description: comp,
-                  competencyType: ''
-                });
-              }
-            }
-          }
-          
-          if (found && compArray.length > 0) {
-            competencies = compArray;
-            console.log(`  Gefunden: ${competencies.length} Kompetenzen als nummerierte Eigenschaften (${pattern})`);
-            break;
-          }
-        }
-      }
-      
-      // Handle special case for Anlagenmechaniker format
-      if (competencies.length === 0 && field.inhalte) {
-        const compArray = [];
-        
-        if (typeof field.inhalte === 'object') {
-          for (const key in field.inhalte) {
-            const item = field.inhalte[key];
-            if (typeof item === 'object') {
-              compArray.push({
-                id: `${field.id}-inhalt-${key}`,
-                title: item.titel || item.thema || item.bezeichnung || `Inhalt ${key}`,
-                description: item.text || item.beschreibung || item.inhalt || '',
-                competencyType: 'Fachkompetenz'
-              });
-            } else if (typeof item === 'string') {
-              compArray.push({
-                id: `${field.id}-inhalt-${key}`,
-                title: `Inhalt ${key}`,
-                description: item,
-                competencyType: 'Fachkompetenz'
-              });
-            }
-          }
-        } else if (Array.isArray(field.inhalte)) {
-          field.inhalte.forEach((item, idx) => {
-            if (typeof item === 'object') {
-              compArray.push({
-                id: `${field.id}-inhalt-${idx}`,
-                title: item.titel || item.thema || item.bezeichnung || `Inhalt ${idx+1}`,
-                description: item.text || item.beschreibung || item.inhalt || '',
-                competencyType: 'Fachkompetenz'
-              });
-            } else if (typeof item === 'string') {
-              compArray.push({
-                id: `${field.id}-inhalt-${idx}`,
-                title: `Inhalt ${idx+1}`,
-                description: item,
-                competencyType: 'Fachkompetenz'
-              });
-            }
-          });
-        }
-        
-        if (compArray.length > 0) {
-          competencies = compArray;
-          console.log(`  Gefunden: ${competencies.length} Kompetenzen aus Inhalte`);
-        }
-      }
-      
-      // Process zeitwert for Anlagenmechaniker format
-      let hoursValue = field.hours || field.stunden || 0;
-      if (field.zeitwert && field.zeitwert.wert) {
-        hoursValue = parseInt(field.zeitwert.wert, 10) || 0;
-      } else if (field.zeitrichtwert) {
-        hoursValue = parseInt(field.zeitrichtwert, 10) || 0;
-      }
-      
-      // Process zeitraum for year
-      let yearValue = field.year || field.jahr || field.ausbildungsjahr || 1;
-      if (field.zeitraum && typeof field.zeitraum === 'string') {
-        const match = field.zeitraum.match(/(\d+)/);
-        if (match && match[1]) {
-          yearValue = parseInt(match[1], 10);
-        }
-      }
-      
-      const parsedField: LearningField = {
-        id: field.id || field.lernfeld_id || field.lernfeldnummer || `lf${index + 1}`,
-        code: field.code || field.nummer || field.lernfeldnummer || `LF${index + 1}`,
-        title: field.title || field.name || field.titel || field.bezeichnung || 'Unbenanntes Lernfeld',
-        description: field.description || field.beschreibung || field.text || field.inhalt || '',
-        hours: hoursValue,
-        year: yearValue,
-        schwerpunkt: field.schwerpunkt || field.fokus || field.thema || '',
-        zeitraum: field.zeitraum || field.dauer || '',
-        competencies: [],
-      };
-      
-      // Parse competencies
-      parsedField.competencies = competencies.map((comp, cIndex) => {
+    if (Array.isArray(competencies)) {
+      parsedField.competencies = competencies.map((comp: any, cIndex: number) => {
         const competency: Competency = {
           id: comp.id || `${parsedField.id}-k${cIndex + 1}`,
           code: comp.code || comp.nummer || `K${cIndex + 1}`,
@@ -589,11 +440,11 @@ export function parseCurriculum(jsonData: any): CurriculumData {
           escoMappings: [],
           competencyAnalysis: {
             skillType: comp.competencyAnalysis?.skillType || comp.analyse?.kompetenztyp || 
-                      comp.analysis?.skillType || comp.analysis?.kompetenztyp || '',
+                       comp.analysis?.skillType || comp.analysis?.kompetenztyp || '',
             lernzielbereich: comp.competencyAnalysis?.lernzielbereich || comp.analyse?.lernzielbereich || 
-                          comp.analysis?.lernzielbereich || '',
+                           comp.analysis?.lernzielbereich || '',
             keywords: comp.competencyAnalysis?.keywords || comp.analyse?.schlagworte || 
-                     comp.analysis?.keywords || comp.analysis?.schlagworte || [],
+                      comp.analysis?.keywords || comp.analysis?.schlagworte || [],
             bloomLevel: comp.competencyAnalysis?.bloomLevel || comp.analyse?.bloomStufe || 
                        comp.analysis?.bloomLevel || comp.analysis?.bloomStufe || '',
             relevance: comp.competencyAnalysis?.relevance || comp.analyse?.relevanz || 
@@ -648,61 +499,249 @@ export function parseCurriculum(jsonData: any): CurriculumData {
           }
         }
         
-        allCompetencies.push(competency);
         return competency;
       });
-      
-      return parsedField;
-    });
+    }
     
-    curriculum.competencies = allCompetencies;
+    return parsedField;
+  });
+}
+
+// Parse the nested format
+function parseNestedFormat(jsonData: any): LearningField[] {
+  console.log("Parsing nested format...");
+  
+  // Determine the correct path to learning fields
+  let lernfelder: any[] = [];
+  
+  if (jsonData.curriculum?.learningFields) {
+    lernfelder = jsonData.curriculum.learningFields;
+  } else if (jsonData.curriculum?.lernfelder) {
+    lernfelder = jsonData.curriculum.lernfelder;
+  } else if (jsonData.rahmenlehrplan?.lernfelder) {
+    lernfelder = jsonData.rahmenlehrplan.lernfelder;
+  } else if (jsonData.rahmenlehrplan?.inhalte) {
+    // Handle special case for "inhalte" containing lernfelder
+    const inhalte = jsonData.rahmenlehrplan.inhalte;
+    lernfelder = [];
     
-    // Generate metadata
-    const competencyCount = allCompetencies.length;
-    const escoMappingCount = allCompetencies.reduce((count, comp) => 
-      count + (comp.escoMappings?.length || 0), 0);
-      
-    const digitalCompetencyCount = allCompetencies.filter(comp => 
-      (comp.competencyAnalysis?.digitalLevel || 0) > 2).length;
-      
-    const competencyTypeDistribution: Record<string, number> = {};
-    allCompetencies.forEach(comp => {
-      if (comp.competencyType) {
-        competencyTypeDistribution[comp.competencyType] = 
-          (competencyTypeDistribution[comp.competencyType] || 0) + 1;
+    for (const key in inhalte) {
+      if (/^lernfeld\s*\d+$/i.test(key)) {
+        const fieldData = inhalte[key];
+        const fieldNumber = key.match(/\d+/)?.[0] || '';
+        
+        lernfelder.push({
+          id: `lf${fieldNumber}`,
+          code: `LF${fieldNumber}`,
+          titel: fieldData.titel || fieldData.bezeichnung || fieldData.name || '',
+          beschreibung: fieldData.beschreibung || fieldData.inhalt || '',
+          stunden: fieldData.zeitrichtwert || fieldData.stunden || 0,
+          jahr: fieldData.ausbildungsjahr || fieldData.jahr || 1,
+          schwerpunkt: fieldData.schwerpunkt || fieldData.fokus || '',
+          
+          // Extract competencies from different possible properties
+          kompetenzen: extractCompetenciesFromNestedField(fieldData, `lf${fieldNumber}`)
+        });
       }
-    });
-    
-    const bloomLevelDistribution: Record<string, number> = {};
-    allCompetencies.forEach(comp => {
-      if (comp.competencyAnalysis?.bloomLevel) {
-        bloomLevelDistribution[comp.competencyAnalysis.bloomLevel] = 
-          (bloomLevelDistribution[comp.competencyAnalysis.bloomLevel] || 0) + 1;
-      }
-    });
-    
-    curriculum.metadata = {
-      competencyCount,
-      escoMappingCount,
-      digitalCompetencyCount,
-      averageCompetenciesPerField: curriculum.learningFields.length > 0 
-        ? competencyCount / curriculum.learningFields.length 
-        : 0,
-      competencyTypeDistribution,
-      bloomLevelDistribution,
-    };
-    
-    console.log("Lehrplanparsen abgeschlossen, gefunden:", {
-      lernfelder: curriculum.learningFields.length,
-      kompetenzen: competencyCount,
-      escoMappings: escoMappingCount
-    });
-    
-    return curriculum;
-  } catch (error) {
-    console.error('Error parsing curriculum data:', error);
-    throw new Error(`Fehler beim Parsen der Lehrplandaten: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
+  
+  if (!Array.isArray(lernfelder) || lernfelder.length === 0) {
+    console.warn("Keine Lernfelder im verschachtelten Format gefunden");
+    return [];
+  }
+  
+  return parseStandardFormat({ learningFields: lernfelder });
+}
+
+// Extract competencies from a nested field
+function extractCompetenciesFromNestedField(fieldData: any, fieldId: string): any[] {
+  // Check various possible locations for competencies
+  if (Array.isArray(fieldData.kompetenzen)) {
+    return fieldData.kompetenzen;
+  }
+  
+  if (Array.isArray(fieldData.competencies)) {
+    return fieldData.competencies;
+  }
+  
+  if (fieldData.zielformulierungen && typeof fieldData.zielformulierungen === 'object') {
+    const competencies = [];
+    
+    for (const compKey in fieldData.zielformulierungen) {
+      const compData = fieldData.zielformulierungen[compKey];
+      if (typeof compData === 'object') {
+        competencies.push({
+          id: `${fieldId}-${compKey}`,
+          title: compData.titel || compData.bezeichnung || 'Kompetenz',
+          description: compData.text || compData.beschreibung || compData.inhalt || '',
+          competencyType: compData.typ || compData.art || ''
+        });
+      } else if (typeof compData === 'string') {
+        // If it's a direct string, use it as description
+        competencies.push({
+          id: `${fieldId}-${compKey}`,
+          title: `Kompetenz ${compKey}`,
+          description: compData,
+          competencyType: ''
+        });
+      }
+    }
+    
+    return competencies;
+  }
+  
+  // Check for more specific competency types
+  const competencies = [];
+  
+  // Check fertigkeiten
+  if (fieldData.fertigkeiten) {
+    if (Array.isArray(fieldData.fertigkeiten)) {
+      fieldData.fertigkeiten.forEach((fertigkeit: any, index: number) => {
+        competencies.push({
+          id: `${fieldId}-fertigkeit-${index}`,
+          title: typeof fertigkeit === 'string' ? `Fertigkeit ${index+1}` : fertigkeit.titel || fertigkeit.bezeichnung,
+          description: typeof fertigkeit === 'string' ? fertigkeit : fertigkeit.text || fertigkeit.beschreibung,
+          competencyType: 'Fertigkeit'
+        });
+      });
+    }
+  }
+  
+  // Check kenntnisse
+  if (fieldData.kenntnisse) {
+    if (Array.isArray(fieldData.kenntnisse)) {
+      fieldData.kenntnisse.forEach((kenntnis: any, index: number) => {
+        competencies.push({
+          id: `${fieldId}-kenntnis-${index}`,
+          title: typeof kenntnis === 'string' ? `Kenntnis ${index+1}` : kenntnis.titel || kenntnis.bezeichnung,
+          description: typeof kenntnis === 'string' ? kenntnis : kenntnis.text || kenntnis.beschreibung,
+          competencyType: 'Kenntnis'
+        });
+      });
+    }
+  }
+  
+  // Check inhalte
+  if (fieldData.inhalte && typeof fieldData.inhalte === 'object') {
+    for (const contentKey in fieldData.inhalte) {
+      const contentItem = fieldData.inhalte[contentKey];
+      competencies.push({
+        id: `${fieldId}-inhalt-${contentKey}`,
+        title: contentItem.titel || contentItem.thema || `Inhalt ${contentKey}`,
+        description: contentItem.text || contentItem.beschreibung || (typeof contentItem === 'string' ? contentItem : ''),
+        competencyType: 'Fachkompetenz'
+      });
+    }
+  }
+  
+  return competencies;
+}
+
+// Try all possible approaches to find learning fields
+function findLearningFieldsAnyFormat(jsonData: any): LearningField[] {
+  console.log("Attempting to find learning fields using all possible approaches...");
+  
+  // Check different possible property names for learning fields
+  const possibleFieldKeys = [
+    'learningFields', 'lernfelder', 'fields', 'felder', 'lf',
+    'curriculum.learningFields', 'curriculum.lernfelder', 
+    'rahmenlehrplan.lernfelder', 'rahmenlehrplan.inhalte'
+  ];
+  
+  let learningFields: any[] = [];
+  
+  for (const key of possibleFieldKeys) {
+    let data = jsonData;
+    
+    // Handle nested properties like 'curriculum.learningFields'
+    if (key.includes('.')) {
+      const parts = key.split('.');
+      let currentObj = jsonData;
+      let valid = true;
+      
+      for (const part of parts) {
+        if (currentObj && currentObj[part]) {
+          currentObj = currentObj[part];
+        } else {
+          valid = false;
+          break;
+        }
+      }
+      
+      if (valid) {
+        data = currentObj;
+      } else {
+        continue;
+      }
+    } else if (jsonData[key]) {
+      data = jsonData[key];
+    } else {
+      continue;
+    }
+    
+    // Check if we found an array of learning fields
+    if (Array.isArray(data)) {
+      learningFields = data;
+      console.log(`Gefunden: ${learningFields.length} Lernfelder in ${key}`);
+      break;
+    }
+    
+    // Special case: check if it's an object with numbered keys (1, 2, 3, etc.) or keys like lf1, lf2
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      const fieldArray = [];
+      let isNumberedObject = false;
+      
+      for (const fieldKey in data) {
+        // Check if keys are numbers or "lf1", "lf2" format
+        if (/^\d+$/.test(fieldKey) || /^lf\d+$/i.test(fieldKey)) {
+          isNumberedObject = true;
+          const field = data[fieldKey];
+          
+          // Add the key as id or code if not present
+          if (typeof field === 'object') {
+            field.id = field.id || fieldKey;
+            field.code = field.code || fieldKey.replace(/^lf/i, 'LF');
+            if (/^\d+$/.test(fieldKey)) {
+              field.code = field.code || `LF${fieldKey}`;
+            }
+            fieldArray.push(field);
+          }
+        }
+      }
+      
+      if (isNumberedObject && fieldArray.length > 0) {
+        learningFields = fieldArray;
+        console.log(`Gefunden: ${learningFields.length} Lernfelder in ${key} (nummeriertes Objekt)`);
+        break;
+      }
+    }
+  }
+  
+  // Try to find objects that might be learning fields based on properties
+  if (learningFields.length === 0) {
+    console.log("Suche nach Objekten die Lernfelder sein könnten basierend auf Eigenschaften...");
+    
+    const allObjects = findAllObjects(jsonData);
+    const possibleFields = allObjects.filter(obj => 
+      (obj.titel || obj.title || obj.name || obj.bezeichnung) && 
+      (obj.id || obj.code || obj.nummer || obj.lernfeldnummer) &&
+      (obj.competencies || obj.kompetenzen || obj.skills || obj.zielformulierungen || obj.inhalte)
+    );
+    
+    if (possibleFields.length > 0) {
+      learningFields = possibleFields;
+      console.log(`Als letzten Ausweg gefunden: ${learningFields.length} mögliche Lernfelder durch Eigenschaftsanalyse`);
+    }
+  }
+  
+  if (learningFields.length === 0) {
+    console.warn("Keine Lernfelder in den erwarteten Eigenschaften gefunden");
+    return [];
+  }
+  
+  // Now parse the found learning fields using the standard format parser
+  return parseStandardFormat({ learningFields });
 }
 
 // Helper function to find all objects in a JSON structure
@@ -718,6 +757,45 @@ function findAllObjects(obj: any, result: any[] = []): any[] {
   return result;
 }
 
+// Generate metadata about the curriculum
+function generateCurriculumMetadata(curriculum: CurriculumData): void {
+  // Calculate various statistics
+  const competencyCount = curriculum.competencies.length;
+  const escoMappingCount = curriculum.competencies.reduce((count, comp) => 
+    count + (comp.escoMappings?.length || 0), 0);
+    
+  const digitalCompetencyCount = curriculum.competencies.filter(comp => 
+    (comp.competencyAnalysis?.digitalLevel || 0) > 2).length;
+    
+  const competencyTypeDistribution: Record<string, number> = {};
+  curriculum.competencies.forEach(comp => {
+    if (comp.competencyType) {
+      competencyTypeDistribution[comp.competencyType] = 
+        (competencyTypeDistribution[comp.competencyType] || 0) + 1;
+    }
+  });
+  
+  const bloomLevelDistribution: Record<string, number> = {};
+  curriculum.competencies.forEach(comp => {
+    if (comp.competencyAnalysis?.bloomLevel) {
+      bloomLevelDistribution[comp.competencyAnalysis.bloomLevel] = 
+        (bloomLevelDistribution[comp.competencyAnalysis.bloomLevel] || 0) + 1;
+    }
+  });
+  
+  curriculum.metadata = {
+    competencyCount,
+    escoMappingCount,
+    digitalCompetencyCount,
+    averageCompetenciesPerField: curriculum.learningFields.length > 0 
+      ? competencyCount / curriculum.learningFields.length 
+      : 0,
+    competencyTypeDistribution,
+    bloomLevelDistribution,
+  };
+}
+
+// Generate a random ID
 function generateId(): string {
   return Math.random().toString(36).substring(2, 15);
 }
